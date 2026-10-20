@@ -1,0 +1,35 @@
+name: Purge all images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Delete all images and reset indexes
+        run: |
+          rm -f ri/hd/*.webp ri/hl/*.webp ri/vd/*.webp ri/vl/*.webp
+          python3 - <<'PY'
+          import json
+          count = {f: {"max": 0, "exclude": []} for f in ["hd", "hl", "vd", "vl"]}
+          open("ri/count.json", "w").write(json.dumps(count, indent=2) + "\n")
+          open("ri/hash_registry.json", "w").write("{}\n")
+          print("indexes reset")
+          PY
+          ls ri/hd ri/hl ri/vd ri/vl
+      - name: Commit purge
+        run: |
+          git config user.name "picbed-crawler"
+          git config user.email "actions@github.com"
+          git add -A ri
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "purge all images"
+            git push
+          fi
