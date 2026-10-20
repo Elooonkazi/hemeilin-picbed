@@ -27,6 +27,10 @@ jobs:
           python-version: "3.11"
       - name: Install deps
         run: pip install -r crawler/requirements.txt
+      - name: Setup and Start Proxy
+        env:
+          PROXY_NODE: ${{ secrets.PROXY_NODE }}
+        run: python crawler/proxy_setup.py
       - name: Run URL crawler
         run: |
           ARGS="--picsum-h 0 --picsum-v 0 --bing 0 --from-sources --max-pages ${{ github.event.inputs.max_pages }} --max-images ${{ github.event.inputs.max_images }}"
