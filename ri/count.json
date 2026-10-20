@@ -1,10 +1,10 @@
 {
   "hd": {
-    "max": 11,
+    "max": 13,
     "exclude": []
   },
   "hl": {
-    "max": 9,
+    "max": 11,
     "exclude": []
   },
   "vd": {
