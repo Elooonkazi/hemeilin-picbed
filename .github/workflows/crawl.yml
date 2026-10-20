@@ -28,6 +28,10 @@ jobs:
           python-version: "3.11"
       - name: Install deps
         run: pip install -r crawler/requirements.txt
+      - name: Setup and Start Proxy
+        env:
+          PROXY_NODE: ${{ secrets.PROXY_NODE }}
+        run: python crawler/proxy_setup.py
       - name: Run crawler
         run: |
           python crawler/crawl.py \
