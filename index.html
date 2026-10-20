@@ -64,6 +64,7 @@
     <ul>
       <li>爬虫 <code>crawler/crawl.py</code>：抓取 Picsum 与 Bing 每日壁纸 → 转 WebP → 按宽高比分横/竖、按平均亮度分深/浅 → SHA-256 + 感知哈希双重去重 → 自动编号并更新 <code>count.json</code></li>
       <li>GitHub Actions 每周一自动跑一次爬虫并提交新图，也可以手动触发（workflow: Crawl new images）</li>
+      <li>自定义图源：在 <code>crawler/sources.txt</code> 里一行一个填入页面链接，或在 Actions 的 <code>Crawl from URL</code> 里直接粘贴链接，爬虫会自动提取页面图片并跟进同站详情页入库</li>
       <li>新图提交后 Cloudflare Pages 自动重新部署，域名不变</li>
     </ul>
   </div>

@@ -30,6 +30,21 @@ Cloudflare Pages（Git 集成，提交自动部署）
 防盗链（可选）：在 Pages 环境变量设置 `ALLOWED_DOMAINS=example.com,foo.com`
 后仅白名单域名可引用；不设则完全公开。`ALLOW_EMPTY_REQUEST` 控制是否允许无 Referer/Origin 的直连（默认允许）。
 
+## 自定义图源（自己填链接）
+
+两种用法，链接都由仓库所有者自己填写：
+
+1. **粘贴即爬**：仓库 Actions → `Crawl from URL` → Run workflow，把页面链接粘进 `url`
+   输入框（可调 `max_pages` 跟进同站详情页数量、`max_images` 入库上限），运行结束自动提交新图并部署。
+2. **固定名单**：把链接一行一个写进 `crawler/sources.txt`，之后运行 `Crawl from URL`
+   时 `url` 留空即可批量爬取名单里的全部页面。
+
+通用提取逻辑：解析页面 HTML 的图片标签与图片直链，跟进同站带编号的详情页；
+下载后走与内置爬虫相同的处理（尺寸过滤 → WebP → 横/竖 × 深/浅 分类 → 双哈希去重 → 更新索引）。
+纯静态 HTML 页面效果最好；强 JS 渲染、登录墙、Cloudflare 人机验证的页面只能拿到原始 HTML 里有的图。
+
+本地等价命令：`python crawler/crawl.py --picsum-h 0 --picsum-v 0 --bing 0 --url <页面链接>`
+
 ## 本地运行爬虫
 
 ```bash
