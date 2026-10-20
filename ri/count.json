@@ -1,1 +1,18 @@
-{"hd":{"exclude":[],"max":0},"hl":{"exclude":[],"max":0},"vd":{"exclude":[],"max":0},"vl":{"exclude":[],"max":0}}
+{
+  "hd": {
+    "max": 10,
+    "exclude": []
+  },
+  "hl": {
+    "max": 14,
+    "exclude": []
+  },
+  "vd": {
+    "max": 7,
+    "exclude": []
+  },
+  "vl": {
+    "max": 6,
+    "exclude": []
+  }
+}
