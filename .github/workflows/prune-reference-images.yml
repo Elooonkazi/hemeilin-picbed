@@ -1,0 +1,44 @@
+name: Prune reference images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify keep set exists
+        run: |
+          for f in ri/hd/12.webp ri/hd/13.webp ri/hl/10.webp ri/hl/11.webp; do
+            test -f "$f" || { echo "MISSING KEEP FILE: $f"; exit 1; }
+          done
+          echo "keep set ok"
+      - name: Delete built-in reference images (run e290650b set)
+        run: |
+          for i in $(seq 1 11); do rm -f "ri/hd/$i.webp"; done
+          for i in $(seq 1 9); do rm -f "ri/hl/$i.webp"; done
+          rm -f ri/vd/*.webp ri/vl/*.webp
+          ls ri/hd ri/hl ri/vd ri/vl
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Renumber kept images and rebuild indexes
+        run: |
+          pip install Pillow
+          python .github/scripts/renumber.py
+          cat ri/count.json
+      - name: Commit prune
+        run: |
+          git config user.name "picbed-crawler"
+          git config user.email "actions@github.com"
+          git add -A ri
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "prune built-in reference images, keep URL-action images"
+            git push
+          fi
