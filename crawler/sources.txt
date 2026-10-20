@@ -7,4 +7,8 @@
 # workflow（不填链接直接运行时会读取本文件）。
 # ============================================================
 # 示例（删掉行首 # 即启用）：
-# https://example.com/gallery/page/1
+# https://8se.me/photos/tag/cosplay
+# https://www.mrds66.com/category/mtds
+# https://xx.knit.bid/type/6
+# https://www.emonl.com/cosplay
+# https://img.hyun.cc
