@@ -1,0 +1,47 @@
+name: Crawl from URL
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "页面链接（留空则读取 crawler/sources.txt 里填的链接）"
+        required: false
+        default: ""
+      max_pages:
+        description: "最多跟进多少个同站详情页"
+        default: "12"
+      max_images:
+        description: "本链接最多入库多少张图"
+        default: "60"
+
+permissions:
+  contents: write
+
+jobs:
+  crawl-url:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r crawler/requirements.txt
+      - name: Run URL crawler
+        run: |
+          ARGS="--picsum-h 0 --picsum-v 0 --bing 0 --from-sources --max-pages ${{ github.event.inputs.max_pages }} --max-images ${{ github.event.inputs.max_images }}"
+          if [ -n "${{ github.event.inputs.url }}" ]; then
+            ARGS="$ARGS --url ${{ github.event.inputs.url }}"
+          fi
+          python crawler/crawl.py $ARGS
+      - name: Commit new images
+        run: |
+          git config user.name "picbed-crawler"
+          git config user.email "actions@github.com"
+          git add ri crawler
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "crawler: add images from URL sources (run ${{ github.run_number }})"
+            git push
+          fi
