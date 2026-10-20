@@ -1,0 +1,48 @@
+name: Crawl new images
+
+on:
+  workflow_dispatch:
+    inputs:
+      picsum_h:
+        description: "Picsum horizontal count"
+        default: "16"
+      picsum_v:
+        description: "Picsum vertical count"
+        default: "16"
+      bing:
+        description: "Bing wallpapers (0-8)"
+        default: "8"
+  schedule:
+    - cron: "17 3 * * 1" # weekly, Mondays 03:17 UTC
+
+permissions:
+  contents: write
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r crawler/requirements.txt
+      - name: Run crawler
+        run: |
+          python crawler/crawl.py \
+            --picsum-h "${{ github.event.inputs.picsum_h || '16' }}" \
+            --picsum-v "${{ github.event.inputs.picsum_v || '16' }}" \
+            --bing "${{ github.event.inputs.bing || '8' }}" \
+            --seed-prefix "run${{ github.run_number }}"
+      - name: Commit new images
+        run: |
+          git config user.name "picbed-crawler"
+          git config user.email "actions@github.com"
+          git add ri crawler
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "crawler: add images (run ${{ github.run_number }})"
+            git push
+          fi
