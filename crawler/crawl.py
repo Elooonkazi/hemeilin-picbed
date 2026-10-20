@@ -158,6 +158,102 @@ def crawl_bing(count: int, registry, seen, stats):
         time.sleep(0.3)
 
 
+# ---------- Generic URL sources (user-supplied links) ----------
+import re
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlparse
+
+IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".avif")
+SKIP_PATH_HINTS = ("login", "register", "signup", "search", "tag/", "category/",
+                   "feed", "rss", "xmlrpc", "wp-admin", "wp-login", "#")
+
+
+class _LinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.imgs = []
+        self.pages = []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "img":
+            for key in ("src", "data-src", "data-original", "data-lazy-src"):
+                if a.get(key):
+                    self.imgs.append(a[key])
+                    break
+            if a.get("srcset"):
+                self.imgs.append(a["srcset"].split(",")[-1].strip().split(" ")[0])
+        elif tag == "a" and a.get("href"):
+            self.pages.append(a["href"])
+
+
+def _looks_like_image(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return path.endswith(IMG_EXTS)
+
+
+def crawl_url(start_url: str, max_pages: int, max_images: int,
+              registry, seen, stats):
+    """Fetch a user-supplied page, extract images, and follow same-host
+    detail-page links (one level of BFS, capped). Generic extractor:
+    works on plain HTML galleries/blogs; JS-heavy or login-walled
+    pages yield whatever the raw HTML contains."""
+    print(f"url source: {start_url} (max_pages={max_pages}, max_images={max_images})")
+    host = urlparse(start_url).netloc
+    queue = [start_url]
+    visited_pages = set()
+    seen_img_urls = set()
+    added_here = 0
+    while queue and len(visited_pages) < max_pages and added_here < max_images:
+        page = queue.pop(0)
+        if page in visited_pages:
+            continue
+        visited_pages.add(page)
+        try:
+            r = requests.get(page, headers=UA, timeout=30)
+            r.raise_for_status()
+            html = r.text
+        except Exception as e:
+            print(f"  ! page failed {page}: {e}")
+            continue
+        parser = _LinkParser()
+        try:
+            parser.feed(html)
+        except Exception:
+            pass
+        for raw in parser.imgs:
+            if added_here >= max_images:
+                break
+            img_url = urljoin(page, raw)
+            if img_url in seen_img_urls or img_url.startswith("data:"):
+                continue
+            seen_img_urls.add(img_url)
+            if not _looks_like_image(img_url) and "upload" not in img_url and "image" not in img_url:
+                continue
+            content = fetch(img_url)
+            if content and add_bytes(content, registry, seen, stats):
+                added_here += 1
+            time.sleep(0.2)
+        for href in parser.pages:
+            nxt = urljoin(page, href)
+            p = urlparse(nxt)
+            if p.netloc != host or nxt in visited_pages or nxt in queue:
+                continue
+            low = nxt.lower()
+            if any(h in low for h in SKIP_PATH_HINTS):
+                continue
+            if _looks_like_image(nxt):
+                if nxt not in seen_img_urls:
+                    seen_img_urls.add(nxt)
+                    content = fetch(nxt)
+                    if content and add_bytes(content, registry, seen, stats):
+                        added_here += 1
+                continue
+            if re.search(r"\d", p.path):  # detail pages usually carry an id/date
+                queue.append(nxt)
+    print(f"  url source done: +{added_here} images from {len(visited_pages)} pages")
+
+
 def rebuild_count():
     count = {}
     for folder in FOLDERS:
@@ -178,6 +274,12 @@ def main():
     ap.add_argument("--picsum-v", type=int, default=24)
     ap.add_argument("--bing", type=int, default=8)
     ap.add_argument("--seed-prefix", default="hemeilin")
+    ap.add_argument("--url", action="append", default=[],
+                    help="user-supplied page URL to crawl (repeatable)")
+    ap.add_argument("--from-sources", action="store_true",
+                    help="also crawl every URL listed in crawler/sources.txt")
+    ap.add_argument("--max-pages", type=int, default=12)
+    ap.add_argument("--max-images", type=int, default=60)
     args = ap.parse_args()
 
     for f in FOLDERS:
@@ -190,6 +292,17 @@ def main():
     crawl_picsum(args.picsum_v, "v", args.seed_prefix, registry, seen, stats)
     if args.bing:
         crawl_bing(args.bing, registry, seen, stats)
+
+    urls = list(args.url)
+    if args.from_sources:
+        src_file = Path(__file__).resolve().parent / "sources.txt"
+        if src_file.exists():
+            for line in src_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    urls.append(line)
+    for u in urls:
+        crawl_url(u, args.max_pages, args.max_images, registry, seen, stats)
 
     REGISTRY_PATH.write_text(json.dumps(registry, indent=2) + "\n")
     rebuild_count()
