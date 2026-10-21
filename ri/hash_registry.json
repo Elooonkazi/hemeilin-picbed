@@ -14,5 +14,17 @@
   "76d11f55a5a8b1c62e84e2cb1ca1d7767d52835f6dfe1e903d9a49535f32b3dd": {
     "file": "hl/2.webp",
     "ahash": "17ff060613187c74"
+  },
+  "eca9d0d8249f2d97fc3fecffa7ab1585d61dac30b6181ff06f5226781d2e86ad": {
+    "file": "hl/1.webp",
+    "ahash": "040047050fffffe7"
+  },
+  "0dbc0e53a4b180520b43f7876b086255377a0ceddfcde7b9519cfad8ca50efdf": {
+    "file": "hd/1.webp",
+    "ahash": "0000001fffff0000"
+  },
+  "6b5548cfa7bc840c6916a36fdcd2b7f4497e76c12bec23203fb8b86656b21438": {
+    "file": "hl/2.webp",
+    "ahash": "ff87a1b9d91081f7"
   }
 }
