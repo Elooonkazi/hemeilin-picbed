@@ -47,5 +47,7 @@ jobs:
             echo "no changes"
           else
             git commit -m "crawler: add images from URL sources (run ${{ github.run_number }})"
-            git push
+            # 拉取远程最新变更并变基，避免推送冲突
+            git pull --rebase origin main
+            git push origin main
           fi
