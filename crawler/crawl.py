@@ -36,7 +36,6 @@ MAX_H_V = 1920
 WEBP_QUALITY = 82
 
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".avif")
-# 移除了 tag/ 和 category/，避免误跳过列表页
 SKIP_PATH_HINTS = (
     "login", "register", "signup", "search",
     "feed", "rss", "xmlrpc", "wp-admin", "wp-login", "#"
@@ -100,7 +99,6 @@ def add_bytes(raw: bytes, registry: dict, seen_ahashes: list, stats: dict) -> bo
         stats["bad"] += 1
         return False
 
-    # 过滤图标或头像（长边必须大于等于 400，且短边不低于 250，防止竖屏壁纸被误杀）
     if max(img.width, img.height) < 400 or min(img.width, img.height) < 250:
         stats["small"] += 1
         return False
@@ -121,7 +119,6 @@ def add_bytes(raw: bytes, registry: dict, seen_ahashes: list, stats: dict) -> bo
 
 
 def fetch_api(url: str) -> bytes | None:
-    """用于无反爬拦截的标准 API（Picsum、Bing）"""
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
         r.raise_for_status()
@@ -169,27 +166,55 @@ def crawl_bing(count: int, registry, seen, stats):
         time.sleep(0.3)
 
 
-# ---------- Playwright 驱动的浏览器爬虫 ----------
+# ---------- Playwright 增强与容错控制 ----------
 
 def _looks_like_image(url: str) -> bool:
     path = urlparse(url).path.lower()
     return path.endswith(IMG_EXTS)
 
 
-def wait_for_cf(page, max_wait=15):
-    """自动检测并等待 Cloudflare 5秒盾跳转"""
+def safe_evaluate(page, script: str, max_retries: int = 3):
+    """防止页面在重定向时执行 evaluate 抛出 execution context destroyed 异常"""
+    for i in range(max_retries):
+        try:
+            return page.evaluate(script)
+        except Exception as e:
+            if "Execution context was destroyed" in str(e) or "navigation" in str(e):
+                page.wait_for_timeout(1500)
+            else:
+                if i == max_retries - 1:
+                    raise e
+                page.wait_for_timeout(1000)
+    return None
+
+
+def wait_for_cf(page, max_wait: int = 20):
+    """自动检测并等待 Cloudflare 5秒盾，等待跳转落地完成后再返回"""
+    cf_keywords = ("just a moment", "请稍候", "attention required", "security check")
     start = time.time()
+    
+    # 刚加载先等待 1.5 秒，给 CF 注入和初始重定向预留时间
+    page.wait_for_timeout(1500)
+    
     while time.time() - start < max_wait:
-        title = (page.title() or "").lower()
-        # 常见 CF 拦截页标志
-        cf_keywords = ("just a moment", "请稍候", "attention required", "security check")
-        if any(k in title for k in cf_keywords):
-            print(f"    [Cloudflare] 正在等待 CF 验证盾通过... ({int(time.time() - start)}s)")
+        try:
+            title = (page.title() or "").lower()
+        except Exception:
             page.wait_for_timeout(1000)
+            continue
+
+        if any(k in title for k in cf_keywords):
+            print(f"    [Cloudflare] 正在等待 CF 盾验证与重定向... ({int(time.time() - start)}s)")
+            page.wait_for_timeout(1500)
         else:
             break
-    # 额外等待确保 JS 渲染完毕
-    page.wait_for_timeout(1500)
+
+    # CF 校验通过后通常有一次最终的 location.href 跳转，等待稳定
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+    except Exception:
+        pass
+    page.wait_for_timeout(2000)
 
 
 def crawl_url_browser(start_url: str, max_pages: int, max_images: int, registry, seen, stats):
@@ -213,7 +238,6 @@ def crawl_url_browser(start_url: str, max_pages: int, max_images: int, registry,
             viewport={"width": 1920, "height": 1080},
             locale="zh-CN",
         )
-        # 抹除自动化特征
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page = context.new_page()
 
@@ -226,85 +250,84 @@ def crawl_url_browser(start_url: str, max_pages: int, max_images: int, registry,
             try:
                 page.goto(curr_url, wait_until="domcontentloaded", timeout=30000)
             except Exception as e:
-                print(f"  ! page open timeout/failed {curr_url}: {e}")
+                print(f"  ! page open failed {curr_url}: {e}")
                 continue
 
-            # 等待 CF 验证盾
-            wait_for_cf(page, max_wait=15)
+            # 处理 CF 等待与跳转
+            wait_for_cf(page, max_wait=20)
 
-            # 滚动页面触发图片懒加载
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2);")
-            page.wait_for_timeout(800)
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-            page.wait_for_timeout(800)
+            # 单页操作全部纳入独立 try 块，防止单个异常导致全局退出
+            try:
+                safe_evaluate(page, "window.scrollTo(0, document.body.scrollHeight / 2);")
+                page.wait_for_timeout(600)
+                safe_evaluate(page, "window.scrollTo(0, document.body.scrollHeight);")
+                page.wait_for_timeout(800)
 
-            # 提取页面中的全部图片地址（优先获取 data-original/data-src 等原图属性）
-            img_srcs = page.evaluate("""() => {
-                const results = new Set();
-                document.querySelectorAll('img').forEach(img => {
-                    const src = img.getAttribute('data-original') 
-                             || img.getAttribute('data-src') 
-                             || img.getAttribute('data-full')
-                             || img.getAttribute('data-zoom-src')
-                             || img.getAttribute('data-lazy-src')
-                             || img.src;
-                    if (src && !src.startsWith('data:')) results.add(src);
-                });
-                return Array.from(results);
-            }""")
+                img_srcs = safe_evaluate(page, """() => {
+                    const results = new Set();
+                    document.querySelectorAll('img').forEach(img => {
+                        const src = img.getAttribute('data-original') 
+                                 || img.getAttribute('data-src') 
+                                 || img.getAttribute('data-full')
+                                 || img.getAttribute('data-zoom-src')
+                                 || img.getAttribute('data-lazy-src')
+                                 || img.src;
+                        if (src && !src.startsWith('data:')) results.add(src);
+                    });
+                    return Array.from(results);
+                }""") or []
 
-            # 提取页面所有超链接（跟进详情页）
-            page_links = page.evaluate("""() => {
-                return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
-            }""")
+                page_links = safe_evaluate(page, """() => {
+                    return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
+                }""") or []
 
-            # 下载并保存图片
-            for raw_src in img_srcs:
-                if added_here >= max_images:
-                    break
-                img_url = urljoin(curr_url, raw_src)
-                if img_url in seen_img_urls:
-                    continue
-                seen_img_urls.add(img_url)
+                # 下载与录入图片
+                for raw_src in img_srcs:
+                    if added_here >= max_images:
+                        break
+                    img_url = urljoin(curr_url, raw_src)
+                    if img_url in seen_img_urls:
+                        continue
+                    seen_img_urls.add(img_url)
 
-                if not _looks_like_image(img_url) and "upload" not in img_url and "image" not in img_url:
-                    continue
+                    if not _looks_like_image(img_url) and "upload" not in img_url and "image" not in img_url:
+                        continue
 
-                try:
-                    # 使用浏览器上下文的 request API 继承当前站点的 Cookie 与 CF 放行凭据
-                    resp = context.request.get(img_url, headers={"Referer": curr_url}, timeout=25000)
-                    if resp.status == 200:
-                        content = resp.body()
-                        if add_bytes(content, registry, seen, stats):
-                            added_here += 1
-                except Exception as e:
-                    pass
-
-            # 递归跟进详情页
-            for href in page_links:
-                nxt = urljoin(curr_url, href)
-                p_url = urlparse(nxt)
-                if p_url.netloc != host or nxt in visited_pages or nxt in queue:
-                    continue
-                low = nxt.lower()
-                if any(h in low for h in SKIP_PATH_HINTS):
-                    continue
-
-                # 如果链接本身就是大图地址，直接加入队列提取
-                if _looks_like_image(nxt):
-                    if nxt not in seen_img_urls:
-                        seen_img_urls.add(nxt)
-                        try:
-                            resp = context.request.get(nxt, headers={"Referer": curr_url}, timeout=25000)
-                            if resp.status == 200 and add_bytes(resp.body(), registry, seen, stats):
+                    try:
+                        resp = context.request.get(img_url, headers={"Referer": curr_url}, timeout=25000)
+                        if resp.status == 200:
+                            content = resp.body()
+                            if add_bytes(content, registry, seen, stats):
                                 added_here += 1
-                        except Exception:
-                            pass
-                    continue
+                    except Exception:
+                        pass
 
-                # 详情页通常包含数字 id 或特定标识路径
-                if re.search(r"\d", p_url.path) or any(k in low for k in ("post", "photo", "article", "view")):
-                    queue.append(nxt)
+                # 队列递归跟进
+                for href in page_links:
+                    nxt = urljoin(curr_url, href)
+                    p_url = urlparse(nxt)
+                    if p_url.netloc != host or nxt in visited_pages or nxt in queue:
+                        continue
+                    low = nxt.lower()
+                    if any(h in low for h in SKIP_PATH_HINTS):
+                        continue
+
+                    if _looks_like_image(nxt):
+                        if nxt not in seen_img_urls:
+                            seen_img_urls.add(nxt)
+                            try:
+                                resp = context.request.get(nxt, headers={"Referer": curr_url}, timeout=25000)
+                                if resp.status == 200 and add_bytes(resp.body(), registry, seen, stats):
+                                    added_here += 1
+                            except Exception:
+                                pass
+                        continue
+
+                    if re.search(r"\d", p_url.path) or any(k in low for k in ("post", "photo", "article", "view")):
+                        queue.append(nxt)
+
+            except Exception as e:
+                print(f"  ! page parse error on {curr_url}: {e}")
 
         browser.close()
 
