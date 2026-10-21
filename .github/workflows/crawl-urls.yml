@@ -14,6 +14,10 @@ on:
         description: "本链接最多入库多少张图"
         default: "60"
 
+concurrency:
+  group: picbed-repo-write
+  cancel-in-progress: false
+  
 permissions:
   contents: write
 
