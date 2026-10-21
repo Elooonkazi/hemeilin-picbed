@@ -8,7 +8,6 @@
 # ============================================================
 # 示例（删掉行首 # 即启用）：
 https://8se.me/photos/tag/cosplay/2
-https://www.mrds66.com/category/mtds
 https://xx.knit.bid/type/6
-https://www.emonl.com/cosplay
+https://www.emonl.com/cosplay-gallery/
 https://img.hyun.cc
