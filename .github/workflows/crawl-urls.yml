@@ -14,10 +14,6 @@ on:
         description: "本链接最多入库多少张图"
         default: "60"
 
-concurrency:
-  group: picbed-repo-write
-  cancel-in-progress: false
-  
 permissions:
   contents: write
 
@@ -30,7 +26,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install deps
-        run: pip install -r crawler/requirements.txt
+        run: |
+          pip install -r crawler/requirements.txt
+          playwright install --with-deps chromium
       - name: Setup and Start Proxy
         env:
           PROXY_NODE: ${{ secrets.PROXY_NODE }}
@@ -51,7 +49,6 @@ jobs:
             echo "no changes"
           else
             git commit -m "crawler: add images from URL sources (run ${{ github.run_number }})"
-            # 拉取远程最新变更并变基，避免推送冲突
             git pull --rebase origin main
             git push origin main
           fi
