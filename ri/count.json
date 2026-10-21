@@ -4,15 +4,15 @@
     "exclude": []
   },
   "hl": {
-    "max": 22,
-    "exclude": []
-  },
-  "vd": {
     "max": 23,
     "exclude": []
   },
+  "vd": {
+    "max": 34,
+    "exclude": []
+  },
   "vl": {
-    "max": 98,
+    "max": 149,
     "exclude": []
   }
 }
