@@ -1,29 +1,18 @@
 #!/usr/bin/env python3
 """
 Image crawler for hemeilin-picbed.
-
-Fetches public images, converts them to WebP, classifies them into
-ri/{hd,hl,vd,vl} (horizontal/vertical x dark/light), deduplicates by
-SHA-256 of the source bytes and by a simple perceptual average-hash,
-then renumbers folders sequentially and rewrites ri/count.json and
-ri/hash_registry.json.
-
-Sources (all license-friendly, no key required):
-  - picsum.photos  (Lorem Picsum, Unsplash-sourced photos, seeded)
-  - Bing daily wallpaper archive (last 8 days, landscape)
-
-Usage:
-  python3 crawler/crawl.py --picsum-h 24 --picsum-v 24 --bing 8
-  python3 crawler/crawl.py --seed-prefix myrun   # new picsum seeds
 """
 import argparse
 import hashlib
 import io
 import json
 import random
+import re
 import sys
 import time
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import requests
 from PIL import Image
@@ -33,11 +22,26 @@ RI = ROOT / "ri"
 FOLDERS = ["hd", "hl", "vd", "vl"]
 COUNT_PATH = RI / "count.json"
 REGISTRY_PATH = RI / "hash_registry.json"
-UA = {"User-Agent": "hemeilin-picbed-crawler/1.0 (+https://github.com)"}
-DARK_THRESHOLD = 115  # mean luminance below this -> dark folder
-MAX_W_H = 1920        # cap horizontal width
-MAX_H_V = 1920        # cap vertical height
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+}
+
+DARK_THRESHOLD = 115
+MAX_W_H = 1920
+MAX_H_V = 1920
 WEBP_QUALITY = 82
+
+IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".avif")
+SKIP_PATH_HINTS = (
+    "login", "register", "signup", "search",
+    "feed", "rss", "xmlrpc", "wp-admin", "wp-login", "#"
+)
 
 
 def ahash(img: Image.Image, size: int = 8) -> str:
@@ -70,10 +74,7 @@ def classify(img: Image.Image) -> str:
 def next_index(folder: str) -> int:
     d = RI / folder
     d.mkdir(parents=True, exist_ok=True)
-    nums = []
-    for p in d.glob("*.webp"):
-        if p.stem.isdigit():
-            nums.append(int(p.stem))
+    nums = [int(p.stem) for p in d.glob("*.webp") if p.stem.isdigit()]
     return (max(nums) + 1) if nums else 1
 
 
@@ -99,7 +100,7 @@ def add_bytes(raw: bytes, registry: dict, seen_ahashes: list, stats: dict) -> bo
     except Exception:
         stats["bad"] += 1
         return False
-    if img.width < 400 or img.height < 400:
+    if img.width < 300 or img.height < 300:
         stats["small"] += 1
         return False
     ah = ahash(img)
@@ -118,7 +119,7 @@ def add_bytes(raw: bytes, registry: dict, seen_ahashes: list, stats: dict) -> bo
 
 def fetch(url: str) -> bytes | None:
     try:
-        r = requests.get(url, headers=UA, timeout=40)
+        r = requests.get(url, headers=HEADERS, timeout=30)
         r.raise_for_status()
         return r.content
     except Exception as e:
@@ -127,13 +128,16 @@ def fetch(url: str) -> bytes | None:
 
 
 def crawl_picsum(count: int, orientation: str, seed_prefix: str, registry, seen, stats):
+    if count <= 0:
+        return
     print(f"picsum {orientation}: {count}")
     for i in range(count):
         seed = f"{seed_prefix}-{orientation}-{i}-{random.randint(0, 99999)}"
-        if orientation == "h":
-            url = f"https://picsum.photos/seed/{seed}/1920/1200"
-        else:
-            url = f"https://picsum.photos/seed/{seed}/1200/1920"
+        url = (
+            f"https://picsum.photos/seed/{seed}/1920/1200"
+            if orientation == "h"
+            else f"https://picsum.photos/seed/{seed}/1200/1920"
+        )
         raw = fetch(url)
         if raw:
             add_bytes(raw, registry, seen, stats)
@@ -141,11 +145,14 @@ def crawl_picsum(count: int, orientation: str, seed_prefix: str, registry, seen,
 
 
 def crawl_bing(count: int, registry, seen, stats):
+    if count <= 0:
+        return
     print(f"bing wallpapers: up to {count}")
     try:
         data = requests.get(
             "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=8&mkt=en-US",
-            headers=UA, timeout=30,
+            headers=HEADERS,
+            timeout=30,
         ).json()
     except Exception as e:
         print(f"  ! bing index failed: {e}")
@@ -158,16 +165,6 @@ def crawl_bing(count: int, registry, seen, stats):
         time.sleep(0.3)
 
 
-# ---------- Generic URL sources (user-supplied links) ----------
-import re
-from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
-
-IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".avif")
-SKIP_PATH_HINTS = ("login", "register", "signup", "search", "tag/", "category/",
-                   "feed", "rss", "xmlrpc", "wp-admin", "wp-login", "#")
-
-
 class _LinkParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -177,7 +174,7 @@ class _LinkParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == "img":
-            for key in ("src", "data-src", "data-original", "data-lazy-src"):
+            for key in ("data-original", "data-src", "data-full", "data-zoom-src", "data-lazy-src", "src"):
                 if a.get(key):
                     self.imgs.append(a[key])
                     break
@@ -192,35 +189,33 @@ def _looks_like_image(url: str) -> bool:
     return path.endswith(IMG_EXTS)
 
 
-def crawl_url(start_url: str, max_pages: int, max_images: int,
-              registry, seen, stats):
-    """Fetch a user-supplied page, extract images, and follow same-host
-    detail-page links (one level of BFS, capped). Generic extractor:
-    works on plain HTML galleries/blogs; JS-heavy or login-walled
-    pages yield whatever the raw HTML contains."""
+def crawl_url(start_url: str, max_pages: int, max_images: int, registry, seen, stats):
     print(f"url source: {start_url} (max_pages={max_pages}, max_images={max_images})")
     host = urlparse(start_url).netloc
     queue = [start_url]
     visited_pages = set()
     seen_img_urls = set()
     added_here = 0
+
     while queue and len(visited_pages) < max_pages and added_here < max_images:
         page = queue.pop(0)
         if page in visited_pages:
             continue
         visited_pages.add(page)
         try:
-            r = requests.get(page, headers=UA, timeout=30)
+            r = requests.get(page, headers=HEADERS, timeout=30)
             r.raise_for_status()
             html = r.text
         except Exception as e:
             print(f"  ! page failed {page}: {e}")
             continue
+
         parser = _LinkParser()
         try:
             parser.feed(html)
         except Exception:
             pass
+
         for raw in parser.imgs:
             if added_here >= max_images:
                 break
@@ -234,6 +229,7 @@ def crawl_url(start_url: str, max_pages: int, max_images: int,
             if content and add_bytes(content, registry, seen, stats):
                 added_here += 1
             time.sleep(0.2)
+
         for href in parser.pages:
             nxt = urljoin(page, href)
             p = urlparse(nxt)
@@ -249,8 +245,9 @@ def crawl_url(start_url: str, max_pages: int, max_images: int,
                     if content and add_bytes(content, registry, seen, stats):
                         added_here += 1
                 continue
-            if re.search(r"\d", p.path):  # detail pages usually carry an id/date
+            if re.search(r"\d", p.path) or "post" in low or "photo" in low or "article" in low:
                 queue.append(nxt)
+
     print(f"  url source done: +{added_here} images from {len(visited_pages)} pages")
 
 
@@ -274,10 +271,8 @@ def main():
     ap.add_argument("--picsum-v", type=int, default=24)
     ap.add_argument("--bing", type=int, default=8)
     ap.add_argument("--seed-prefix", default="hemeilin")
-    ap.add_argument("--url", action="append", default=[],
-                    help="user-supplied page URL to crawl (repeatable)")
-    ap.add_argument("--from-sources", action="store_true",
-                    help="also crawl every URL listed in crawler/sources.txt")
+    ap.add_argument("--url", action="append", default=[], help="user-supplied page URL to crawl (repeatable)")
+    ap.add_argument("--from-sources", action="store_true", help="also crawl every URL listed in crawler/sources.txt")
     ap.add_argument("--max-pages", type=int, default=12)
     ap.add_argument("--max-images", type=int, default=60)
     args = ap.parse_args()
@@ -307,8 +302,6 @@ def main():
     REGISTRY_PATH.write_text(json.dumps(registry, indent=2) + "\n")
     rebuild_count()
     print(json.dumps(stats, ensure_ascii=False))
-    if stats["added"] == 0:
-        print("no new images added", file=sys.stderr)
     return 0
 
 
